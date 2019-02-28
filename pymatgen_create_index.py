@@ -1,8 +1,9 @@
 import os
 import argparse
 from tqdm import tqdm
-from lib import vasp
-from lib.preprocessing import path_1D, interpolate, interpolate_normalize
+from lib import pymatgen
+from pymatgen import MPRester
+from lib.pymatgen_preprocessing import path_1D, interpolate, interpolate_normalize
 import numpy as np
 from annoy import AnnoyIndex
 from pymatgen.electronic_structure.bandstructure import BandStructure
@@ -24,16 +25,20 @@ annoyindex = AnnoyIndex(int(2*opt.dimensions), metric='angular')
 lookuptable = []
 
 
-for folder in tqdm(os.listdir('data')):
-    if folder == '.DS_Store':
-        continue
-    kpoints = vasp.Kpoints('data/' + folder + '/KPOINTS.gz')
-    doscar = vasp.Doscar('data/' + folder + '/DOSCAR.gz')
+for mpid in ["mp-2090"]:
+
+    mpr = MPRester('4JzM8sNnMkyVJceK')
+
+    bs = mpr.get_bandstructure_by_material_id(mpid)
+    dos = mpr.get_dos_by_material_id(mpid)
+
+    kpoints = pymatgen.Kpoints(bs)
+    doscar = pymatgen.Doscar(dos)
     if doscar.converged == False:
         continue # skip calculations that did not converge
     fermi_energy = doscar.fermi_energy
 
-    eigenval = vasp.Eigenval('data/' + folder + '/EIGENVAL.gz', fermi_level=fermi_energy)
+    eigenval = pymatgen.Eigenval(bs, fermi_energy)
 
     bands = eigenval.spin_up
 
@@ -42,43 +47,44 @@ for folder in tqdm(os.listdir('data')):
 
     # Find continuous segments in KPOINTS
     # For example: segment_sizes => [40, 40, 40, 20]
+    '''
     segment_sizes = kpoints.segment_sizes
 
     # Extract the bands and split them in continuous segments
     segmented_lower_band = np.split(bands[lower_fermi_band_index+opt.band_index], np.cumsum(segment_sizes))[:-1]
     segmented_upper_band = np.split(bands[lower_fermi_band_index+opt.band_index+1], np.cumsum(segment_sizes))[:-1]
     segmented_kpoints = np.split(eigenval.k_points, np.cumsum(segment_sizes))[:-1]
+    '''
+
+    k = eigenval.k_points
+    band_l = bands[lower_fermi_band_index+opt.band_index]
+    band_u = bands[lower_fermi_band_index+opt.band_index+1]
 
     # Process each pair of bands in a continuous segment
     k_norm = 0
-    for k, band_l, band_u in zip(segmented_kpoints, segmented_lower_band, segmented_upper_band):
-        k_1D = np.array(path_1D(k))
-        k_1D_strided = [k_1D[i] for i in range(0, len(k_1D), opt.stride)]
+    #for k, band_l, band_u in zip(segmented_kpoints, segmented_lower_band, segmented_upper_band):
+    k_1D = np.array(path_1D(k))
+    k_1D_strided = [k_1D[i] for i in range(0, len(k_1D), opt.stride)]
 
-        '''
-        print(k_1D)
-        print(band_l)
-        print(band_u)
-        '''
-        for window_left in k_1D_strided:
-            window_right = window_left + opt.width
-            if window_right > np.max(k_1D):
-                break
-            selection = ((k_1D >= window_left) & (k_1D <= window_right))
-            window_k = k_1D[selection]
-            window_band_l = band_l[selection]
-            window_band_u = band_u[selection]
-            window_size = np.max(window_k) - np.min(window_k)
+    for window_left in k_1D_strided:
+        window_right = window_left + opt.width
+        if window_right > np.max(k_1D):
+            break
+        selection = ((k_1D >= window_left) & (k_1D <= window_right))
+        window_k = k_1D[selection]
+        window_band_l = band_l[selection]
+        window_band_u = band_u[selection]
+        window_size = np.max(window_k) - np.min(window_k)
 
-            gap = np.min(window_band_u) - np.max(window_band_l)
+        gap = np.min(window_band_u) - np.max(window_band_l)
 
-            window_band_l = interpolate_normalize(window_k, window_band_l, opt.dimensions)
-            window_band_u = interpolate_normalize(window_k, window_band_u, opt.dimensions)
+        window_band_l = interpolate_normalize(window_k, window_band_l, opt.dimensions)
+        window_band_u = interpolate_normalize(window_k, window_band_u, opt.dimensions)
 
-            annoyindex.add_item(len(lookuptable), np.concatenate([window_band_l, window_band_u]))
-            lookuptable.append([int(folder), k_norm + window_left, gap])
+        annoyindex.add_item(len(lookuptable), np.concatenate([window_band_l, window_band_u]))
+        lookuptable.append([mpid, k_norm + window_left, gap])
 
-        k_norm += np.max(k_1D)
+    k_norm += np.max(k_1D)
 
 annoyindex.build(opt.trees)
 annoyindex.save('index_%d.ann' % opt.band_index)

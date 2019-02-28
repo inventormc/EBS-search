@@ -1,8 +1,7 @@
 import argparse
 from annoy import AnnoyIndex
 import numpy as np
-from lib import vasp
-from lib.preprocessing import interpolate_normalize, path_1D, plot_band_structure
+from lib.pymatgen_preprocessing import interpolate_normalize, path_1D, plot_band_structure
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dimensions', type=int, default=16, help='number of data points for each band')
@@ -50,7 +49,6 @@ else:
 # Search
 results = annoyindex.get_nns_by_vector(search_vector, 1, search_k=opt.search_k, include_distances=True)
 for result, distance in zip(*results):
-    folder, k, gap = lookuptable[result]
-    print('COD =', int(folder), 'Angular distance =', distance, 'k =', k)
-    print(type(opt.band_index), type(opt.width), type(k), type(opt.pattern))
-    plot_band_structure(str(int(folder)), opt.band_index, opt.width, k, opt.pattern)
+    mpid, k, gap = lookuptable[result]
+    print('COD =', mpid, 'Angular distance =', distance, 'k =', k)
+    plot_band_structure(str(mpid), opt.band_index, opt.width, k, opt.pattern)
